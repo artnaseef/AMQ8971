@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.artnaseef.AMQ8971</groupId>
+        <artifactId>AMQ8971</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>docker-it</artifactId>
+
+    <packaging>jar</packaging>
+
+    <name>Docker Integration Tests</name>
+    <description>Build-Time Docker Integration Tests</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+            </resource>
+            <resource>
+                <directory>src/main/resources-filtered</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
+
+        <plugins>
+
+            <!--                           -->
+            <!-- COPY ASSEMBLY TAR.GZ FILE -->
+            <!--                           -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>com.artnaseef.AMQ8971</groupId>
+                                    <artifactId>assembly</artifactId>
+                                    <version>${project.version}</version>
+                                    <type>tar.gz</type>
+                                    <destFileName>test-app-assembly.tar.gz</destFileName>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>org.apache.activemq</groupId>
+                                    <artifactId>apache-activemq</artifactId>
+                                    <version>${activemq.version}</version>
+                                    <type>tar.gz</type>
+                                    <classifier>bin</classifier>
+                                    <destFileName>apache-activemq.tar.gz</destFileName>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!--           -->
+            <!--    DOCKER -->
+            <!--           -->
+            <plugin>
+                <groupId>io.fabric8</groupId>
+                <artifactId>docker-maven-plugin</artifactId>
+                <version>0.38.1</version>
+                <configuration>
+                    <skip>${skipITs}</skip>
+                    <showLogs>true</showLogs>
+                    <autoCreateCustomNetworks>true</autoCreateCustomNetworks>
+                    <images>
+                        <!--           -->
+                        <!-- ACTIVEMQ  -->
+                        <!--           -->
+                        <image>
+                            <name>amq8971-activemq-it-image</name>
+                            <alias>activemq</alias>
+                            <build>
+                                <contextDir>${project.basedir}</contextDir>
+                                <dockerFile>target/classes/docker/amq/Dockerfile</dockerFile>
+                                <args>
+                                    <ACTIVEMQ_VERSION>${activemq.version}</ACTIVEMQ_VERSION>
+                                </args>
+                            </build>
+                            <run>
+                                <ports>
+                                    <port>amq-openwire-port:61616</port>
+                                    <port>amq-console-port:8161</port>
+                                </ports>
+                                <wait>
+                                    <log>Apache ActiveMQ .* started</log>
+                                    <time>60000</time>
+                                </wait>
+                                <network>
+                                    <mode>custom</mode>
+                                    <name>amq8971-docker-it-network</name>
+                                    <alias>activemq</alias>
+                                </network>
+                            </run>
+                        </image>
+
+                        <!--                    -->
+                        <!-- APPLICATION IMAGE  -->
+                        <!--                    -->
+                        <image>
+                            <name>amq8971-application-it-image</name>
+                            <alias>application</alias>
+                            <build>
+                                <contextDir>${project.basedir}</contextDir>
+                                <dockerFile>target/classes/docker/test-app/Dockerfile</dockerFile>
+                                <args>
+                                    <KARAF_VERSION>${karaf.version}</KARAF_VERSION>
+                                </args>
+                                <assembly>
+                                    <name>stage</name>
+                                    <targetDir>/</targetDir>
+
+                                    <inline xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                                                    xmlns="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.2"
+                                                    xsi:schemaLocation="
+                                                        http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.2
+                                                        http://maven.apache.org/xsd/assembly-1.1.2.xsd
+                                                        ">
+
+                                        <fileSets>
+                                            <fileSet>
+                                                <directory>${project.build.outputDirectory}/karaf/etc</directory>
+                                                <outputDirectory>/app/assembly-${project.version}/etc</outputDirectory>
+                                            </fileSet>
+                                        </fileSets>
+                                    </inline>
+                                </assembly>
+                            </build>
+                            <run>
+                                <ports>
+                                    <port>karaf-ssh-port:8101</port>
+                                    <port>karaf-http-port:8181</port>
+                                    <!--<port>5005:5005</port>-->
+                                </ports>
+                                <env>
+                                    <!-- Need to make sure address=* is in the DEBUG OPTS otherwise it listens on the container's localhost only -->
+                                    <JAVA_OPTS>-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005</JAVA_OPTS>
+                                    <ACTIVEMQ_BROKER_URL>failover://(tcp://activemq:61616)</ACTIVEMQ_BROKER_URL>
+                                </env>
+                                <wait>
+                                    <log>APPLICATION STARTED</log>
+                                    <time>60000</time>
+                                </wait>
+                                <network>
+                                    <mode>custom</mode>
+                                    <name>amq8971-docker-it-network</name>
+                                    <alias>application</alias>
+                                </network>
+                            </run>
+                        </image>
+                    </images>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>start-before-integration-test</id>
+                        <phase>pre-integration-test</phase>
+                        <goals>
+                            <goal>build</goal>
+                            <goal>start</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>stop-after-integration-test</id>
+                        <phase>post-integration-test</phase>
+                        <goals>
+                            <goal>stop</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!--                -->
+            <!-- TEST EXECUTION -->
+            <!--                -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.0.0-M5</version>
+                <configuration>
+                    <skipITs>${skipITs}</skipITs>
+                    <reuseForks>true</reuseForks>
+                    <useSystemClassLoader>false</useSystemClassLoader>
+                    <systemProperties>
+                        <property>
+                            <name>application.base-url</name>
+                            <value>http://localhost:${karaf-http-port}</value>
+                        </property>
+                    </systemProperties>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
